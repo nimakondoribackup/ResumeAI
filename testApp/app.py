@@ -2,7 +2,8 @@ from flask import Flask, render_template, request, redirect, url_for, send_file,
 import fitz  # PyMuPDF for PDF processing
 from io import BytesIO
 from reportlab.lib.pagesizes import letter
-from reportlab.pdfgen import canvas
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 import os
 import tempfile
 
@@ -26,11 +27,11 @@ def upload_file():
     
     file = request.files['file']
     
-    # Extract text from the PDF
-    extracted_text = extract_text(file)
+    # Extract text with formatting from the PDF
+    extracted_text = extract_text_with_formatting(file)
     
     # Reconstruct the PDF with the extracted text
-    pdf_content = reconstruct_pdf(extracted_text)
+    pdf_content = reconstruct_pdf_with_formatting(extracted_text)
     
     # Save the reconstructed PDF to a temporary file
     with open(TEMP_PDF_PATH, 'wb') as f:
@@ -46,34 +47,79 @@ def download_file(filename):
         flash('No PDF content found.')
         return redirect(url_for('index'))
 
-def extract_text(file):
+def extract_text_with_formatting(file):
     pdf_document = fitz.open(stream=file.read(), filetype="pdf")
-    text = ""
-    for page in pdf_document:
-        text += page.get_text("text")
-    return text
+    text_data = []
+    
+    for page_num, page in enumerate(pdf_document):
+        blocks = page.get_text("dict")["blocks"]
+        for block in blocks:
+            if block["type"] == 0:  # text block
+                for line in block["lines"]:
+                    line_text = ""
+                    for span in line["spans"]:
+                        line_text += span["text"]
+                    text_data.append({
+                        "text": line_text,
+                        "font": span["font"],
+                        "size": span["size"],
+                        "color": span["color"]
+                    })
+                    
+    return text_data
 
-def reconstruct_pdf(text):
+def extract_color(color_value):
+    """Convert the extracted color value to a tuple format suitable for reportlab."""
+    if isinstance(color_value, int):
+        # Convert integer color (e.g., 0xRRGGBB) to (R, G, B)
+        r = (color_value >> 16) & 0xFF
+        g = (color_value >> 8) & 0xFF
+        b = color_value & 0xFF
+        return (r / 255.0, g / 255.0, b / 255.0)
+    elif isinstance(color_value, tuple) and len(color_value) == 3:
+        # Color might be already in RGB tuple
+        return (color_value[0] / 255.0, color_value[1] / 255.0, color_value[2] / 255.0)
+    else:
+        # Default to black if color is not recognized
+        return (0, 0, 0)
+
+def reconstruct_pdf_with_formatting(text_data):
     pdf_buffer = BytesIO()
-    c = canvas.Canvas(pdf_buffer, pagesize=letter)
-    width, height = letter
-    text_object = c.beginText(40, height - 50)
-    text_object.setFont("Helvetica", 12)
+    doc = SimpleDocTemplate(pdf_buffer, pagesize=letter)
+    content = []
+    styles = getSampleStyleSheet()
     
-    lines = text.split('\n')
-    for line in lines:
-        text_object.textLine(line)
-        if text_object.getY() < 50:  # Move to a new page if needed
-            c.drawText(text_object)
-            c.showPage()
-            text_object = c.beginText(40, height - 50)
-            text_object.setFont("Helvetica", 12)
+    # Define a mapping from extracted fonts to standard fonts
+    font_mapping = {
+        'calibri': 'Helvetica',  # Map Calibri to Helvetica
+        'times': 'Times-Roman',  # Map Times to Times-Roman
+        'arial': 'Helvetica',    # Map Arial to Helvetica
+        'courier': 'Courier'     # Map Courier to Courier
+        # Add more mappings as needed
+    }
     
-    c.drawText(text_object)
-    c.save()
-
+    for item in text_data:
+        # Map the extracted font to a supported font
+        font_name = font_mapping.get(item.get('font', '').lower(), 'Helvetica')
+        
+        # Extract color and ensure it's in the correct format
+        color = extract_color(item.get('color', (0, 0, 0)))
+        
+        # Create a custom style based on extracted formatting
+        custom_style = ParagraphStyle(
+            name='CustomStyle',
+            fontName=font_name,
+            fontSize=item.get('size', 12),
+            textColor=color
+        )
+        
+        p = Paragraph(item["text"], style=custom_style)
+        content.append(p)
+        content.append(Spacer(1, 12))  # Add space between paragraphs
+        
+    doc.build(content)
     pdf_buffer.seek(0)
     return pdf_buffer.getvalue()  # Return the content as bytes
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    app.run(debug=True, port=3000)
