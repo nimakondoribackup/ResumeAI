@@ -11,6 +11,7 @@ from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.lib.fonts import addMapping
 import logging
+from PIL import Image
 
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
@@ -67,10 +68,22 @@ def extract_content_with_formatting(file):
     
     for page in pdf_document:
         page_dict = page.get_text("dict")
+        images = []
+        for img in page.get_images(full=True):
+            xref = img[0]
+            base_image = pdf_document.extract_image(xref)
+            images.append({
+                "image": base_image["image"],
+                "rect": page.get_image_bbox(img),
+                "width": base_image["width"],
+                "height": base_image["height"]
+            })
+        
         content_data.append({
             "text": page_dict["blocks"],
             "lines": page.get_drawings(),
-            "images": page.get_images(),
+            "images": images,
+            "links": page.get_links(),
             "width": page.rect.width,
             "height": page.rect.height
         })
@@ -99,7 +112,7 @@ def extract_color(color_value):
 def get_font_name(original_font):
     """Map original font names to available ReportLab fonts."""
     font_mapping = {
-        'Calibri': 'Calibri',
+        'Calibri': 'Helvetica',  # Use Helvetica as a fallback for Calibri
         'Arial': 'Helvetica',
         'Times New Roman': 'Times-Roman',
         # Add more mappings as needed
@@ -116,6 +129,33 @@ def reconstruct_pdf_with_formatting(content_data):
 
     for page_num, page_content in enumerate(content_data):
         try:
+            # Draw images
+            for img in page_content.get("images", []):
+                try:
+                    image = Image.open(BytesIO(img["image"]))
+                    image_path = f"temp_image_{page_num}.png"
+                    image.save(image_path)
+                    c.drawImage(image_path, img["rect"][0], float(page_content["height"]) - img["rect"][3], 
+                                width=img["rect"][2] - img["rect"][0], height=img["rect"][3] - img["rect"][1])
+                    os.remove(image_path)
+                except Exception as e:
+                    logger.error(f"Error drawing image on page {page_num}: {e}")
+
+            # Draw lines and shapes
+            for line in page_content.get("lines", []):
+                try:
+                    color = extract_color(line.get("color"))
+                    c.setStrokeColorRGB(*color)
+                    c.setLineWidth(max(0.1, float(line.get("width", 1))))
+                    if line.get("type") == "l":  # Line
+                        x0, y0, x1, y1 = line.get("rect", [0, 0, 0, 0])
+                        c.line(x0, float(page_content["height"]) - y0, x1, float(page_content["height"]) - y1)
+                    elif line.get("type") in ["re", "qu"]:  # Rectangle or Quad
+                        x0, y0, x1, y1 = line.get("rect", [0, 0, 0, 0])
+                        c.rect(x0, float(page_content["height"]) - y1, x1 - x0, y1 - y0)
+                except Exception as e:
+                    logger.error(f"Error drawing line/shape on page {page_num}: {e}")
+
             # Draw text
             for block in page_content.get("text", []):
                 if block.get("type") == 0:  # text block
@@ -133,22 +173,15 @@ def reconstruct_pdf_with_formatting(content_data):
                             except Exception as e:
                                 logger.error(f"Error drawing text on page {page_num}: {e}")
 
-            # Draw lines
-            for line in page_content.get("lines", []):
+            # Add links
+            for link in page_content.get("links", []):
                 try:
-                    color = extract_color(line.get("color"))
-                    c.setStrokeColorRGB(*color)
-                    c.setLineWidth(max(0.1, float(line.get("width", 1))))
-                    rect = line.get("rect", [0, 0, 0, 0])
-                    x0, y0, x1, y1 = map(float, rect)
-                    c.line(x0, float(page_content["height"]) - y0, x1, float(page_content["height"]) - y1)
+                    rect = link.get("from")
+                    if rect:
+                        c.linkURL(link.get("uri", ""), (rect[0], float(page_content["height"]) - rect[3], 
+                                                        rect[2], float(page_content["height"]) - rect[1]))
                 except Exception as e:
-                    logger.error(f"Error drawing line on page {page_num}: {e}")
-
-            # Draw images (simplified, may need adjustment)
-            for img in page_content.get("images", []):
-                # This part needs more complex handling to extract and place the image correctly
-                pass
+                    logger.error(f"Error adding link on page {page_num}: {e}")
 
             c.showPage()
         except Exception as e:
