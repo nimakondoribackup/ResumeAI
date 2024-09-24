@@ -3,23 +3,35 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>PDF Content</title>
+    <title>PDF Content and AI Response</title>
     <style>
         pre {
             white-space: pre-wrap;
             word-wrap: break-word;
+            background-color: #f0f0f0;
+            padding: 10px;
+            border-radius: 5px;
+        }
+        .content-section {
+            margin-bottom: 30px;
         }
     </style>
 </head>
 <body>
-    <h1>Extracted Text Content</h1>
-    {% for page in content %}
-        <h2>Page {{ loop.index }}</h2>
-        <pre>{{ page }}</pre>
-    {% endfor %}
+    <div class="content-section">
+        <h1>Extracted Text Content</h1>
+        <pre>{{ extracted_content }}</pre>
+    </div>
+
+    <div class="content-section">
+        <h1>AI Response</h1>
+        <pre>{{ ai_response }}</pre>
+    </div>
     
-    <h2>Download Reconstructed PDF</h2>
-    <a href="{{ url_for('download_file', filename=filename) }}">Download {{ filename }}</a>
+    <div class="content-section">
+        <h2>Download Reconstructed PDF</h2>
+        <a href="{{ url_for('download_file', filename=filename) }}">Download {{ filename }}</a>
+    </div>
     
     <p><a href="{{ url_for('index') }}">Upload another file</a></p>
 </body>
